@@ -24,3 +24,7 @@ there are 5 rows, from top to bottom:
 Wigner function of the cavity state, Cavity state in Fock space (mostly there to check if it is chosen large enough), corrected analytic wave function (to show that the analytic results are self-consistent), uncorrected analytic wave function, simulated wave function.
 
 The last two should be identical except at the edges of the plot, where the simulated wave function is underestimated (see doc of misc.py)
+
+## Note
+The analytic wave function assumes a controlled-U gate in the circuit. This is not quite correct, as we actually use the gate U^-1/2 \ket{0}\bra{0} U^1/2 \ket{1}\bra{1}.
+This leads to a single Pauli-X shift between the analytic and simulated wave-functions for each round. To correct for this, the analysis gives good results if the oscillator-qubit is encoded in either the state 0 or state 1. Most importantly, this does not lead to the current issues.
