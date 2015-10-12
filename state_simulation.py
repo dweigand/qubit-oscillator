@@ -150,6 +150,20 @@ def qubit_reset(state, x):
         state = sx * state
         return state.unit()
 
+
+def remove_qubit(state):
+    """
+    Remove the qubit from the joint system. Assumes qubit_reset() has been run
+
+    Args:
+        state: Qutip state object, joint cavity-qubit state, must be pure
+
+    Returns:
+        Qutip state
+    """
+    data = state.data[::2]
+    state = Qobj(data)
+    return state.unit()
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # Protocol
