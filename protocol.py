@@ -108,7 +108,7 @@ def final_state(n_m, H, psi0, mode):
     # W, y_vec = wigner(psi.ptrace(0),x_vec, x_vec, method='fft')
     # pfunc = integrate.romb(W, dx = dx, axis = 1)
     # psi = sim.correcting_cheat(n_m, y_vec, pfunc, psi).ptrace(0)
-    psi = psi.ptrace(0)
+    psi = sim.remove_qubit(psi)
     return psi
 
 
