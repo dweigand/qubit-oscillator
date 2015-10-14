@@ -50,14 +50,14 @@ np.set_printoptions(precision=2)        # Set numpy to print with 2 digits
 N = 150                                 # dimension of Fock space
 delta = 0.2                             # initial squeezing
 r = np.log(1/delta)                     # computes the squeezing factor
-mode = 2
+mode = 1
 n_points_plot = 1025
 error_threshold = np.sqrt(np.pi)/6
 
-N_p = 2
-m = 2
+N_results = 2
+MMax = 2
 Min = 0
-Max = 2**m
+Max = 2**MMax
 # 2 ok
 
 lim = 20
@@ -100,15 +100,10 @@ H = - chi * Hqc     # - K_s * H2c - K_qs * H2qc
 
 def final_state(n_m, H, psi0, mode):
     psi = psi0
-    for j in np.arange(len(n_m)):
-        psi = sim.perfect_protocol(psi, H, n_m, j, mode)
-    # psi = sim.correcting_shift(n_m, psi, mode).ptrace(0)
-    # x_vec = np.linspace(-lim,lim,n_points_plot)
-    # dx = np.mean([np.diff(x_vec).max(), np.diff(x_vec).min()])
-    # W, y_vec = wigner(psi.ptrace(0),x_vec, x_vec, method='fft')
-    # pfunc = integrate.romb(W, dx = dx, axis = 1)
-    # psi = sim.correcting_cheat(n_m, y_vec, pfunc, psi).ptrace(0)
-    psi = psi.ptrace(0)
+    for m in np.arange(1,len(n_m)+1):
+        psi = sim.protocol(psi, m, n_m, mode, H)
+    psi = sim.correcting_shift(m, n_m, mode, psi)
+    psi = sim.remove_qubit(psi)
     return psi
 
 
@@ -125,52 +120,61 @@ if __name__ == '__main__':
     print("initialized")
 
     psi0 = tensor(squeeze(N, r) * basis(N, 0), basis(2, 0)).unit()
-
-    result_list = result_range(Min, Max, m)
+    result_list = result_range(Min, Max, MMax)
     print(result_list)
     state_list = parallel_map(final_state, result_list,
                             task_args=(H, psi0, mode))
     print("obtained new state, time: %6f" % float(time.time()-start))
     x_vec, y_vec, W, qfunc, pfunc, qfunc_m, pfunc_m, p_z, p_x, error_rate =\
         sim.analysis_wrapper(state_list, lim, n_points_plot, error_threshold)
-
     print("error analysis done, time: %6f" % float(time.time()-start))
+    q_wavefunc, p_wavefunc = list(zip(
+        *parallel_map(sim.wavefunc,state_list,task_args=(x_vec,))))
+    print("error analysis 2 done, time: %6f" % float(time.time()-start))
     print("p_z")
     print(p_z)
     print("p_x")
     print(p_x)
     print("error rate")
     print(np.asarray(error_rate))
-    mins = np.asarray([np.mod(y_vec[np.argmax(pfunc[i])], np.sqrt(np.pi))
-                       for i in np.arange(len(state_list))])
-    print("mins")
-    print(mins)
-
+    
+    hist, bins = np.histogram(np.clip(np.asarray(error_rate), 0, 0.2),
+        500, range=(0, 1), density=True)
+    
+    widths = np.diff(bins)
+    widths[100] = 0.03
+    plt.bar(bins[:-1], hist, widths, color="None")
+    plt.show()
+    exit()
     inter_vec = np.linspace(-np.sqrt(np.pi)/2, np.sqrt(np.pi)/2, 200)
     vec = np.mod(y_vec+np.sqrt(np.pi)/2, np.sqrt(np.pi))-np.sqrt(np.pi)/2
-    psi_noc = [np.abs(fb.psiv_noc(inter_vec, m, int(''.join(map(str, i)), 2),
-                                  mode))**2 for i in result_list]
-    psi_c = [np.abs(fb.psiv(inter_vec, m, int(''.join(map(str, i)), 2),
-                            mode))**2 for i in result_list]
-    pfunc_wrap = [misc.wrap_function(vec, pfunc[i], inter_vec)
+    
+    psi_noc = [np.abs(fb.psiv_noc(inter_vec, len(n_m), n_m, mode))**2
+                for n_m in result_list]
+    psi_c = [np.abs(fb.psiv(inter_vec, len(n_m), n_m, mode))**2
+                for n_m in result_list]
+    
+    # if the wavefunc is obtained this way, v is mapped to -v
+    pfunc_wrap = [misc.wrap_function(vec, pfunc[i], -inter_vec)
                   for i in np.arange(len(pfunc))]
+    p_wavefunc_wrap = [misc.wrap_function(x_vec, p_wavefunc[i], inter_vec)
+                  for i in np.arange(len(p_wavefunc))]
+    func1 = psi_noc
+    vec1 = inter_vec
+    xlim1 = np.sqrt(np.pi)/2
 
-    func1 = psi_c
-    vec1 = -inter_vec
-    xlim1 = 0.5*np.sqrt(np.pi)
+    func2 = pfunc_wrap
+    vec2 = inter_vec
+    xlim2 = np.sqrt(np.pi)/2
 
-    func2 = psi_noc
-    vec2 = -inter_vec
-    xlim2 = 0.5*np.sqrt(np.pi)
-
-    func3 = pfunc_wrap
+    func3 = psi_c
     vec3 = inter_vec
-    xlim3 = 0.5*np.sqrt(np.pi)
+    xlim3 = np.sqrt(np.pi)/2
 
     wlim = parallel_map(sim.absmax, W)
     ticks = np.arange(-10*np.ceil(lim/np.sqrt(np.pi)),
-                      10*np.ceil(lim/np.sqrt(np.pi)) + 1, 1) * np.sqrt(np.pi)
-    labels = ["" for t in ticks]
+                      10*np.ceil(lim/np.sqrt(np.pi)) + 1, 1) * np.sqrt(np.pi)/2
+    labels = ["" for i in ticks]
 
     global axes
     global fig

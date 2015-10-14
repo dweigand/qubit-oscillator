@@ -57,26 +57,22 @@ if __name__ == '__main__':
 
 from scipy.special import binom
 import numpy as np
-import scipy.integrate as int
+import scipy.integrate
 import scipy.optimize as opt
 import time
 import matplotlib.pylab as plt
 import sys
-import itertools as it
+import itertools
 
 import unittest
 
 from misc import Memoize
 from qutip import *
 
-import test_data
+print("Warning, measurement results are stored inverse")
+print("e.g. round1=0, round2=1 is stored as x=2")
 
-
-# Create a list of random results when this module is imported.
-# We want the results to be random, but consistent through multiple calls
-# with the same arguments.
-random_list = np.random.random_sample((10, 2**10))*2*np.pi
-
+# import test_data
 
 M = 10
 theta = np.linspace(0, 2*np.pi, 2**M+1)
@@ -163,9 +159,12 @@ class TestFeedback(unittest.TestCase):
 # -----------------------------------------------------------------------------
 # FUNCTIONS
 
+def shorten(m, n_m):
+    return np.take(n_m,np.arange(m))
+
 # Checked, OK
 @Memoize
-def P(m, x, mode):
+def P(m, n_m, mode):
     """
     Compute the probability P(theta|x) of initial phase theta given results x.
 
@@ -179,15 +178,16 @@ def P(m, x, mode):
     """
     if m == 0:
         return 1
-    p = P(m-1, np.floor_divide(x, 2), mode) * np.power(
-            np.cos(0.5*(np.pi*np.mod(x, 2) + feedback(m, x, mode)+theta)), 2)
+    n_m = shorten(m, n_m)
+    p = P(m-1, n_m, mode) *\
+        np.cos(0.5*(np.pi*n_m[m-1] + feedback(m, n_m, mode)+theta))**2
     return p
 
 
 # phase estimate of result x at round m
 # Checked
 @Memoize
-def estimate(m, x, mode):
+def estimate(m, n_m, mode):
     """
     Compute the estimate of the protocol given results x.
 
@@ -206,9 +206,9 @@ def estimate(m, x, mode):
 
     # Note that the numpy doc on np.angle is wrong,
     # the angle is in the interval (-pi,pi).
-
-    p = P(m, x, mode)*np.exp(1j*theta)
-    return np.angle(int.romb(p, 2*np.pi/(2**M + 1)))
+    n_m = shorten(m, n_m)
+    p = P(m, n_m, mode)*np.exp(1j*theta)
+    return np.angle(scipy.integrate.romb(p, 2*np.pi/(2**M + 1)))
 
 
 # -----------------------------------------------------------------------------
@@ -217,10 +217,13 @@ def estimate(m, x, mode):
 # Functions needed to obtain the feedback in various protocols are defined here
 # An explanation of the protocols is found in the doc of feedback_function
 
-def feedback(m, x, mode):
+def feedback(m, n_m, mode):
     """
     wrapper for feedback_function, saves some time (f(1,0) = f(1,1) etc.)
-
+    
+    the feedback does not depend on the last measurement result, as it is 
+    applied before the last measurement. This wrapper helps with memoization.
+    
     Args:
         m: Integer, current round of the protocol
         x: Integer, measurement results of the whole protocol
@@ -229,15 +232,13 @@ def feedback(m, x, mode):
     Returns:
         Float, feedback
     """
-    if m == 0:
-        print("m must not be 0")
-        exit()
-    return feedback_function(m-1, np.floor_divide(x, 2), mode)
+    n_m = shorten(m-1, n_m)
+    return feedback_function(m-1, n_m, mode)
 
 
 # Checked, seems good
 @Memoize
-def feedback_function(m, x, mode):
+def feedback_function(m, n_m, mode):
     """
     Compute feedback depending on mode (rpe, arpe, off). wrapped by feedback()
 
@@ -264,16 +265,18 @@ def feedback_function(m, x, mode):
         if m == 0:
             # if no measurement has been made, any feedback is ok. Choose 0.
             return 0
-        return opt.fminbound(_S_optimize, 0, 2*np.pi, args=(m, x, mode))
+        return opt.fminbound(_S_optimize, 0, 2*np.pi, args=(m, n_m, mode))
 
     elif mode == 2:
         return 0
 
     elif mode == 3:
-        return random_list[m, x]
+        # Memoization ensures that multiple calls with same args yield same res
+        return np.random.random_sample()
+    
 
-
-def _S_optimize(phi, m, x, mode):
+# TODO uses global var M
+def _S_optimize(phi, m, n_m, mode):
     """
     Form Average of the Holevo variance over results u=0,1
 
@@ -292,16 +295,15 @@ def _S_optimize(phi, m, x, mode):
     """
     S_sum = np.float(0)
     for u in np.arange(2):
-        S = np.exp(1j*theta)*P(m, x, mode)*np.power(
-                                      np.cos(0.5*(np.pi*u+phi+theta)), 2)
-        S_sum += np.abs(int.romb(S, 2*np.pi/(2**M + 1)))
+        S = np.exp(1j*theta)*P(m, n_m, mode)*np.cos(0.5*(np.pi*u+phi+theta))**2
+        S_sum += np.abs(scipy.integrate.romb(S, 2*np.pi/(2**M + 1)))
     return -S_sum
 
 # -----------------------------------------------------------------------------
 # STATE
 
 
-def psiv(v, m, x, mode):
+def psiv(v, m, n_m, mode):
     """
     Return the corrected state after the idealized protocol u, v basis.
 
@@ -323,11 +325,12 @@ def psiv(v, m, x, mode):
     """
 
     # The estimate is added, as we measure -v, where v is the shift (see paper)
-    vc = v + estimate(m, x, mode)/(2*np.sqrt(np.pi))
-    return psiv_noc(vc, m, x, mode)
+    n_m = shorten(m, n_m)
+    vc = v + estimate(m, n_m, mode)/(2*np.sqrt(np.pi))
+    return psiv_noc(vc, m, n_m, mode)
 
 
-def psiv_noc(v, m, x, mode):
+def psiv_noc(v, m, n_m, mode):
     """
     Return the uncorrected state after the idealized protocol u, v basis.
 
@@ -346,16 +349,17 @@ def psiv_noc(v, m, x, mode):
     Returns:
         Array, Abs**2 of the wavefunction for the values of v
     """
-    psi = np.zeros(len(v), dtype=complex)
+    n_m = shorten(m, n_m)
+    psi = np.zeros(len(v), dtype=np.complex_)
     for s in np.arange(m+1):
-        psi += np.exp(1j*np.sqrt(np.pi)*2*s*(v))*_distrib(m, x, s, mode)
-    return psi/_norm(m, x, mode)
+        psi += np.exp(1j*np.sqrt(np.pi)*2*s*v)*_distrib(m, n_m, s, mode)
+    return psi/_norm(m, n_m, mode)
 
 
 # Checked, seems good
 # checked second time, in depth. algorithm is OK.
 @Memoize
-def _distrib(m, x, j, mode):
+def _distrib(m, n_m, s, mode):
     """
     Obtain distribution of squeezed states forming a code state defined by x
 
@@ -365,27 +369,26 @@ def _distrib(m, x, j, mode):
     Args:
         m: Integer, current round of the protocol
         x: Integer, measurement results of the whole protocol
-        j: Integer, running index of the squeezed state
+        s: Integer, running index of the squeezed state
         mode: Mode (rpe, arpe, off) for feedback integer 0,1 or 2
 
     Returns:
-        Complex, Weight of the squeezed state j in a code state
+        Complex, Weight of the squeezed state s in a code state
     """
-    if j == 0:
+    if s == 0:
         return 1
-    n_comb = np.int(binom(m, j))
-    phases = np.zeros(m, dtype=complex)
-    for i in np.arange(1, m+1):
-        x_current = np.floor_divide(x, 2**(m-i))
-        phases[i-1] = feedback(i, x_current, mode) + np.mod(x_current, 2)*np.pi
-    t = it.chain.from_iterable(it.combinations(phases, j))
-    t = np.fromiter(t, dtype=complex, count=n_comb*j)
-    t.resize((n_comb, j))
+    n_comb = np.int(binom(m, s))
+    phases = np.zeros(m, dtype=np.complex_)
+    for i in np.arange(m):
+        phases[i] = feedback(i+1, n_m, mode) + n_m[i]*np.pi
+    t = itertools.chain.from_iterable(itertools.combinations(phases, s))
+    t = np.fromiter(t, dtype=np.complex_, count=n_comb*s)
+    t.resize((n_comb, s))
     t = np.exp(1j*t.sum(axis=1))
     return t.sum()
 
 
-def _norm(m, x, mode):
+def _norm(m, n_m, mode):
     """
     Approximate the norm of a code state after m measurements with result x
 
@@ -401,8 +404,8 @@ def _norm(m, x, mode):
         Float, norm of the state
     """
     nrm = 0
-    for j in np.arange(m+1):
-        nrm += np.power(np.abs(_distrib(m, x, j, mode)), 2)
+    for s in np.arange(m+1):
+        nrm += np.abs(_distrib(m, n_m, s, mode))**2
     return np.sqrt(nrm*np.sqrt(np.pi))
 
 # -----------------------------------------------------------------------------
@@ -410,7 +413,7 @@ def _norm(m, x, mode):
 
 
 @Memoize
-def P_no_error(m, x, mode):
+def P_no_error(m, n_m, mode):
     """
     Compute the probability to obtain a good code state given m, x and mode
 
@@ -422,18 +425,24 @@ def P_no_error(m, x, mode):
     Returns:
         Float, probability
     """
+    n_m = shorten(m, n_m)
     v = np.linspace(-np.sqrt(np.pi)/6, np.sqrt(np.pi)/6, 2**M + 1)
-    psi = np.power(np.abs(psiv(v, m, x, mode)), 2)
-    return int.romb(psi, np.sqrt(np.pi)/(3*(2**M + 1)))
+    psi = np.abs(psiv(v, m, n_m, mode))**2
+    return scipy.integrate.romb(psi, np.sqrt(np.pi)/(3*(2**M + 1)))
 
 
 # -----------------------------------------------------------------------------
 # MISC
 
-def _parallel_helper(x, m, mode):
-    feedback_function(m, x, mode)
-    estimate(m, x, mode)
-    return 1 - P_no_error(m, x, mode)
+def _parallel_helper(n_m, m, mode):
+    #feedback_function(m, x, mode)
+    #estimate(m, x, mode)
+    return 1 - P_no_error(m, n_m, mode)
+
+
+def result_range(Min, Max, m):
+    """Return range min-max as bit strings of length m"""
+    return np.arange(Min, Max)[:, np.newaxis] >> np.arange(m)[::-1] & 1
 
 
 # -----------------------------------------------------------------------------
@@ -461,17 +470,17 @@ if __name__ == '__main__':
     # compute
     for mode in np.arange(4):
         mode_name = ['rpe', 'arpe', 'off', 'random'][mode]
-        P_array = [np.zeros(2**m) for m in np.arange(Mmax)]
-        for m in np.arange(Mmax):
+        P_array = [np.zeros(2**m) for m in np.arange(1,Mmax+1)]
+        for m in np.arange(1,Mmax+1):
             # print(m)
-            x = np.arange(2**m)
-            P_array[m] = parallel_map(_parallel_helper, x,
+            result_list = result_range(0, 2**m, m)
+            P_array[m-1] = parallel_map(_parallel_helper, result_list,
                                       task_args=(m, mode))
             # print(np.mean(P_array[m]))
-            hist, bins = np.histogram(np.clip(P_array[m], 0, 0.2),
+            hist, bins = np.histogram(np.clip(P_array[m-1], 0, 0.2),
                                       numBins, range=(0, 1), density=True)
-            hist_array[mode, m] = hist/numBins
-            bin_array[mode, m] = bins
+            hist_array[mode, m-1] = hist/numBins
+            bin_array[mode, m-1] = bins
         print(mode_name+' done')
     print('computing done')
     hist_array = hist_array.transpose(1, 0, 2)
@@ -490,8 +499,8 @@ if __name__ == '__main__':
     # plot
     for mode in np.arange(4):
         for i, m in enumerate(plotList):
-            bins = bin_array[m][mode]
-            hist = hist_array[m][mode]
+            bins = bin_array[m-1][mode]
+            hist = hist_array[m-1][mode]
             widths = np.diff(bins)
             widths[100] = 0.03
             ax = ax_array[i][mode]

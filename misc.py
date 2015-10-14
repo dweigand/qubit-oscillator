@@ -12,12 +12,23 @@ class Memoize:
         self.memo = {}
 
     def __call__(self, *args):
-        if args not in self.memo:
-            self.memo[args] = self.f(*args)
-        return self.memo[args]
+        arglist = list(args)
+        for i, arg in enumerate(arglist):
+            if isinstance(arg, np.ndarray):
+                arg.flags.writeable = False
+                arglist[i] = hash(arg.data)
+        key = tuple(arglist)
+        if key not in self.memo:
+            self.memo[key] = self.f(*args)
+        return self.memo[key]
 
     def reset(self):
         self.memo = {}
+
+
+def int2bin(Min, Max, m):
+    return np.arange(Min, Max)[:,np.newaxis] >> np.arange(m)[::-1] & 1
+
 
 
 def split_function(x, y):

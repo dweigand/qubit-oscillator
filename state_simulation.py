@@ -39,8 +39,11 @@ if __name__ == '__main__':
     matplotlib.use('Qt4Agg')
 
 import matplotlib.pyplot as plt
-import scipy.integrate as integrate
+import scipy.integrate
+import scipy.special
+import scipy.misc
 import numpy as np
+import itertools
 
 import feedback as fb
 from qutip import *
@@ -150,26 +153,48 @@ def qubit_reset(state, x):
         state = sx * state
         return state.unit()
 
+
+def remove_qubit(state):
+    """
+    Remove the qubit from the joint system. Assumes qubit_reset() has been run
+
+    Args:
+        state: Qutip state object, joint cavity-qubit state, must be pure
+
+    Returns:
+        Qutip state
+    """
+    data = state.data[::2]
+    state = Qobj(data)
+    return state.unit()
+
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # Protocol
 
 # The evolution is done according to Fig 10 in arxiv/1506.05033v2 (our paper)
 
+def final_state(n_m, H, psi0, mode):
+    """
+    Return the state after a series of measurements with result-string n_m
 
-"""
-Comment to self:
-fb.feedback and qubit_reset both use the measurement result of the current
-round. That is not needed, and bad, if the measurement result is obtained
-during the round, e.g. via RNG. Change that.
+    Args:
+        n_m: Binary List, bit-string of results. n_m[m] is the m-th round.
+        H: Hamiltonian used for time evolution
+        psi0: Qutip state, initial state
+        mode: mode used for feedback, see feedback.feedback()
 
-bad Idea to use x and n
- -> Seems necessary, as lists cannot be memoized efficiently
-"""
+    Returns:
+        Qutip state
+    """
+    psi = psi0
+    for m in np.arange(1,len(n_m)+1):
+        psi = protocol(psi, m, n_m, mode, H)
+    psi = correcting_shift(m, n_m, mode, psi)
+    psi = remove_qubit(psi)
+    return psi
 
-
-# currently not used
-def protocol(state, H, n_m, m, mode):
+def protocol(state, m, n_m, mode, H):
     """
     Do the protocol in arxiv/1506.05033, Fig 5 on a state using time-evolution
 
@@ -186,11 +211,7 @@ def protocol(state, H, n_m, m, mode):
     Returns:
         Qutip state
     """
-    # Workaround
-    # used as workaround for the problems in protocol()
-    x = int(''.join(map(str, n_m)), 2)
-    #
-    phi = fb.feedback(m+1, x, mode)
+    phi = fb.feedback(m, n_m, mode)
     state = hadamard * state
     result1 = controlled_rotation(state, H)
     state = result1.states[-1].unit()
@@ -198,11 +219,11 @@ def protocol(state, H, n_m, m, mode):
     result2 = controlled_rotation(state, H)
     state = result2.states[-1].unit()
     state = hadamard * phasegate_(phi) * sx * state
-    state = qubit_reset(state, n_m[m])
+    state = qubit_reset(state, n_m[m-1])
     return state.unit()
 
 
-def perfect_protocol(state, H, n_m, m, mode):
+def perfect_protocol(state, m, n_m, mode, H):
     """
     Do the protocol in arxiv/1506.05033, Fig 5 on a state using the circuit
 
@@ -216,19 +237,16 @@ def perfect_protocol(state, H, n_m, m, mode):
     Returns:
         Qutip state
     """
-    # Workaround
-    # used as workaround for the problems in protocol()
-    x = int(''.join(map(str, n_m)), 2)
-
-    phi = fb.feedback(m+1, x, mode)
+    distr = [(np.abs(fb._distrib(m, n_m, j, mode)),np.angle(fb._distrib(m, n_m, j, mode))) for j in np.arange(m+1)]
+    phi = fb.feedback(m, n_m, mode)
     state = hadamard * state
     state = controlled_zgate(displace(N, np.sqrt(np.pi/2))) * state
     state = hadamard * phasegate_(phi) * state
-    state = qubit_reset(state, n_m[m])
+    state = qubit_reset(state, n_m[m-1])
     return state.unit()
 
 
-def correcting_shift(n_m, state, mode):
+def correcting_shift(m, n_m, mode, state):
     """
     Correct the state based on the estimate for n_m.
 
@@ -242,33 +260,32 @@ def correcting_shift(n_m, state, mode):
     Returns:
         array of length x_inter
     """
-    x = int(''.join(map(str, n_m)), 2)
-    est = fb.estimate(len(n_m), x, mode)
+    est = fb.estimate(m, n_m, mode)
     return (displace_(1j*est/(2*np.sqrt(2*np.pi))) * state).unit()
 
 
-def correcting_cheat(n_m, y_vec, pfunc, state):
-    """
-    Correct the state based on an error analysis of pfunc
+#def correcting_cheat(n_m, y_vec, pfunc, state):
+    #"""
+    #Correct the state based on an error analysis of pfunc
 
-    Deprecated, should not be used. Uses lots of computational power and is not
-    properly tested.
+    #Deprecated, should not be used. Uses lots of computational power and is not
+    #properly tested.
 
-    Args:
-        n_m: list of measurement results
-        y_vec: x-vector for pfunc
-        pfunc: wigner function in p-space
-        state: state to be corrected
-    Returns:
-        array of length x_inter
-    """
-    y_vec = (np.mod(y_vec+np.sqrt(np.pi)/2,
-                    np.sqrt(np.pi))-np.sqrt(np.pi)/2)*2*np.sqrt(np.pi)
-    p = pfunc*np.exp(1j*y_vec)
-    est = np.angle(integrate.simps(p, y_vec))
-    print(n_m)
-    print(est/(2*np.sqrt(np.pi)))
-    return (displace_(-0) * state).unit()
+    #Args:
+        #n_m: list of measurement results
+        #y_vec: x-vector for pfunc
+        #pfunc: wigner function in p-space
+        #state: state to be corrected
+    #Returns:
+        #array of length x_inter
+    #"""
+    #y_vec = (np.mod(y_vec+np.sqrt(np.pi)/2,
+                    #np.sqrt(np.pi))-np.sqrt(np.pi)/2)*2*np.sqrt(np.pi)
+    #p = pfunc*np.exp(1j*y_vec)
+    #est = np.angle(scipy.integrate.simps(p, y_vec))
+    #print(n_m)
+    #print(est/(2*np.sqrt(np.pi)))
+    #return (displace_(-0) * state).unit()
 
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
@@ -302,9 +319,6 @@ def analysis_wrapper(states, lim, n_points_plot, threshold):
                                     task_args=(x_vec, x_vec),
                                     task_kwargs={'method': 'fft'})))
 
-    # Other methods for wigner() than 'fft' require huge storage
-    # W = list(zip(*parallel_map(wigner, states, task_args = (x_vec, x_vec))))
-    # yvecs = xvecs
     xvecs = np.repeat([x_vec, x_vec], [1, len(states)-1], axis=0)
 
     y_vec = yvecs[-1]
@@ -349,20 +363,43 @@ def analysis_function(W_tuple, threshold):
     condlist_x = np.abs(np.mod(x_vec + np.sqrt(np.pi)/2,
                                np.sqrt(np.pi)) - np.sqrt(np.pi)/2) < threshold
 
-    pfunc = integrate.romb(w, dx=dx, axis=1)
-    qfunc = integrate.romb(w, dx=dy, axis=0)
+    pfunc = scipy.integrate.romb(w, dx=dx, axis=1)
+    qfunc = scipy.integrate.romb(w, dx=dy, axis=0)
 
-    error = 1-integrate.romb(pfunc, dx=dy)
+    error = 1-scipy.integrate.romb(pfunc, dx=dy)
     if error > 0.001:
         print("rounding error of Wigner function is large: %6f" % error)
 
     pfunc_m = mask(pfunc, condlist_y)
     qfunc_m = mask(qfunc, condlist_x)
-    p_z = integrate.romb(pfunc_m, dx=dy)
-    p_x = integrate.romb(qfunc_m, dx=dx)
+    p_z = scipy.integrate.romb(pfunc_m, dx=dy)
+    p_x = scipy.integrate.romb(qfunc_m, dx=dx)
     error_rate = 1-p_x * p_z
     return qfunc, pfunc, qfunc_m, pfunc_m, p_z, p_x, error_rate
 
+
+def wavefunc(state, x_vec):
+    """
+    Return the wavefunctions of a state in q and p using Hermite polynomials
+
+    Args:
+        state: some pure qutip state
+        x_vec: array of x-values on which the wavefunctions are evaluated
+
+    Returns:
+        q: Array, wavefunction in q
+        p: Array, wavefunction in p
+    """
+    N = state.dims[0][-1]
+    q = np.zeros_like(x_vec, dtype=np.complex_)
+    p = np.zeros_like(x_vec, dtype=np.complex_)
+    cx = state.data.tocoo()
+    for n,_,data in itertools.izip(cx.row, cx.col, cx.data):
+        q += (data*np.exp(-x_vec**2/2.0)*scipy.special.eval_hermite(n,x_vec)
+              /np.sqrt(scipy.misc.factorial(n)*2**n))
+        p += (data*np.exp(-0.5*(x_vec**2+1j*np.pi*n))*scipy.special.eval_hermite(n,x_vec)
+              /np.sqrt(scipy.misc.factorial(n)*2**n))
+    return q, p
 
 # -----------------------------------------------------------------------------
 # Helper functions
@@ -391,14 +428,31 @@ def mask(choicelist, condlist, default=0):
     return np.select(condlist_list, choicelist_list, default)
 
 
+def result_range(Min, Max, m):
+    """Return range min-max as bit strings of length m"""
+    return np.arange(Min, Max)[:, np.newaxis] >> np.arange(m)[::-1] & 1
+
+
+def result_random(N_results, m):
+    """Return N_results random bit-strings of length m"""
+    return np.random.random_integers(0,1,size=(N_results,m))
+
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # SIMULATION
 if __name__ == '__main__':
+    # -------------------------------------------------------------------------
+    # SETTINGS
+    method = 'histogram'
     start = time.time()
     print("start")
-    delta = 0.14                                # initial squeezing
-    r = np.log(1/delta)                         # computes the squeezing factor
+    delta = 0.14                             # initial squeezing
+    mode = 1
+    MMax = 8
+    numBins = 500
+    
+    r = np.log(1/delta)                      # computes the squeezing factor
+    lim = 20                                 # fixed for equal precision in p,q
 
     # Hamiltonians
     Hc = nc                                     # cavity evolution
@@ -408,102 +462,125 @@ if __name__ == '__main__':
     H2qc = nnc * sz
     H = - chi * Hqc  # - K_s * H2c - K_qs * H2qc # Hamiltonian for protocol
 
-    n_m = [0, 1]
-    # n_2 = [1,1,1,1,0]]                        # measurement result
-    mode = 1
-    lim = (len(n_m)+2)*np.sqrt(np.pi)
-    print("result is %s" % str(n_m))
+    result_list = result_range(0, 2**MMax, MMax)
+    
+    #print("result is %s" % str(n_m))
     if mode == 0:
         print("feedback using rpe")
     elif mode == 1:
         print("feedback using arpe")
     elif mode == 2:
         print("feedback off")
-
+    
+    # -------------------------------------------------------------------------
+    # EVOLUTION
+    
     psi0 = tensor(squeeze(N, r) * basis(N, 0), basis(2, 0)).unit()
-    psi = psi0
-    print("evolving...")
-    state_list = []
-    # for m in np.arange(len(n_m)):
-    #    [psi, result1, result2] = protocol(psi, n_m, m)
-    #    state_list.append([psi.ptrace(0), result1, result2])
-
-    for m in np.arange(len(n_m)):
-        psi = protocol(psi, H, n_m, m, mode)
-        state_list.append(psi.ptrace(0))
-
-    psi_end = correcting_shift(n_m, psi, mode)
+    state_list = parallel_map(final_state, result_list,
+                            task_args=(H, psi0, mode))
     print("obtained new state, time: %6f" % float(time.time()-start))
-
+    
     # -------------------------------------------------------------------------
-    # -------------------------------------------------------------------------
-    # Analysis
-
-    states = [state_list[i] for i in np.arange(len(state_list))]
-    states.insert(0, psi0.ptrace(0))
-    states.append(psi_end.ptrace(0))
-
-    global axes
-    global fig
-    fig, axes = plt.subplots(5, len(states), figsize=(12, 2))
-
-    (x_vec, y_vec, W,
-     qfunc, pfunc, qfunc_m, pfunc_m,
-     p_z, p_x, error_rate) = analysis_wrapper(states, lim, n_points_plot,
-                                              error_threshold)
-
+    # ANALYSIS
+    
+    x_vec, y_vec, W, qfunc, pfunc, qfunc_m, pfunc_m, p_z, p_x, error_rate =\
+        analysis_wrapper(state_list, lim, n_points_plot, error_threshold)
+    print("error analysis done, time: %6f" % float(time.time()-start))
+    
+    print("p_z")
     print(p_z)
+    print("p_x")
     print(p_x)
+    print("error rate")
     print(error_rate)
-    func1 = qfunc
-    vec1 = x_vec
+    
+    # -------------------------------------------------------------------------
+    # PLOTTING
+    if method == 'histogram':
+        hist, bins = np.histogram(np.clip(error_rate, 0, 0.2),
+                                      numBins, range=(0, 1), density=True)
+        hist = hist/numBins
+        widths = np.diff(bins)
 
-    func2 = pfunc
-    vec2 = y_vec
+        fig, ax = plt.subplots(1, 1, sharex='col', sharey='row')
+        
+        fig.set_size_inches(8.75*2, 11)
+        plt.rc('font', size=14, **{'family': 'sans-serif',
+                                'sans-serif': ['Helvetica']})
+        plt.rc('text', usetex=True)
+        ylabels = [r"${0}$".format(0.1*x) for x in range(11)]
+        xlabels = [r"${0}$".format(0.05*x) for x in range(5)]
+        xlabels[-1] = r'$> 0.2$'
+        widths[100] = 0.03
+        ax.bar(bins[:-1], hist, widths, color="None")
+        ax.set_xlim([0, 0.21])
+        plt.xticks(0.05 * np.arange(5))
+        plt.yticks(0.1 * np.arange(11))
+        ax.set_xticklabels(xlabels)
+        ax.set_yticklabels(ylabels)
+        ax.set_ylim([0, 0.6])
+        ax.set_ylabel(r'$P$', rotation='horizontal')
+        ax.yaxis.labelpad = 20
+        ax.set_xlabel(r'$P_{\mathrm{error,p}}^{\sqrt{\pi}/6}$')
+        print("plotting done, time: %6f" % float(time.time()-start))
+        plt.show()
+        exit()
+    
+    if method == 'single':
 
-    func3 = pfunc_m
-    vec3 = y_vec
+        pfunc_wrap = [misc.wrap_function(y_vec, pfunc[i], -inter_vec)
+                for i in np.arange(len(pfunc))]
+        
+        func1 = qfunc
+        vec1 = x_vec
+        xlim1 = np.sqrt(np.pi)*6
 
-    wlim = parallel_map(absmax, W)
-    ticks = np.arange(-10*np.ceil(lim/np.sqrt(np.pi)),
-                      10*np.ceil(lim/np.sqrt(np.pi)) + 1,
-                      1) * np.sqrt(np.pi)/6
-    xlim = np.sqrt(np.pi)
-    labels = ["" for t in ticks]
+        func2 = pfunc_wrap
+        vec2 = inter_vec
+        xlim2 = np.sqrt(np.pi)/2
 
-    for i in np.arange(len(states)):
-        axes[0][i].contourf(x_vec, y_vec, W[i], 100,
-                            norm=matplotlib.colors.Normalize(-wlim[i],
-                                                             wlim[i]),
-                            cmap=plt.get_cmap('RdBu'))
-        axes[0][i].set_xlabel(r'Re $\alpha$', fontsize=18)
-        axes[0][i].set_ylabel(r'Im $\alpha$', fontsize=18)
-        # axes[0][i].set_xticks(ticks* np.sqrt(np.pi))
-        # axes[0][i].set_xticklabels(labels, fontsize=20)
-        # axes[0][i].set_yticks(ticks * np.sqrt(np.pi))
-        # axes[0][i].set_yticklabels(labels, fontsize=20)
-        # axes[0][i].grid(True)
-        plot_fock_distribution(states[i], fig=fig, ax=axes[1][i])
-        axes[2][i].plot(vec1, func1[i])
-        axes[2][i].set_xticks(ticks)
-        axes[2][i].set_xticklabels(labels, fontsize=20)
-        axes[2][i].set_xlim(-3*np.sqrt(np.pi), 3*np.sqrt(np.pi))
-        axes[2][i].grid(True)
-        axes[3][i].plot(vec2, func2[i])
-        axes[3][i].set_xticks(ticks)
-        axes[3][i].set_xticklabels(labels, fontsize=20)
-        axes[3][i].set_xlim(-xlim, xlim)
-        axes[3][i].grid(True)
-        axes[4][i].plot(vec3, func3[i])
-        axes[4][i].set_xticks(ticks)
-        axes[4][i].set_xticklabels(labels, fontsize=20)
-        axes[4][i].set_xlim(-xlim, xlim)
-        axes[4][i].grid(True)
+        func3 = psi_c
+        vec3 = inter_vec
+        xlim3 = np.sqrt(np.pi)/2
 
-    print("result has been %s" % str(n_m))
-    Pn_m = fb.P_no_error(len(n_m), int(''.join(map(str, n_m)), 2), mode)
-    print("Z error rate should be %s" % str(float(1-Pn_m)))
-    print("Z error rate is %s" % str(float(1-p_z[-1])))
-    print("Total error rate is %s" % str(float(error_rate[-1])))
-    print("done, time: %6f" % float(time.time()-start))
-    plt.show()
+        wlim = parallel_map(sim.absmax, W)
+        ticks = np.arange(-10*np.ceil(lim/np.sqrt(np.pi)),
+                            10*np.ceil(lim/np.sqrt(np.pi)) + 1, 1) * np.sqrt(np.pi)/2
+        labels = ["" for i in ticks]
+
+        global axes
+        global fig
+        fig, axes = plt.subplots(5, len(state_list), figsize=(12, 2))
+
+        for i in np.arange(len(state_list)):
+            axes[0][i].contourf(x_vec, y_vec, W[i], 100,
+                                norm=matplotlib.colors.Normalize(-wlim[i],
+                                                                    wlim[i]),
+                                cmap=plt.get_cmap('RdBu'))
+            axes[0][i].set_xlabel(r'Re $\alpha$', fontsize=18)
+            axes[0][i].set_ylabel(r'Im $\alpha$', fontsize=18)
+            # axes[0][i].set_xticks(ticks* np.sqrt(np.pi))
+            # axes[0][i].set_xticklabels(labels, fontsize=20)
+            # axes[0][i].set_yticks(ticks * np.sqrt(np.pi))
+            # axes[0][i].set_yticklabels(labels, fontsize=20)
+            # axes[0][i].grid(True)
+            plot_fock_distribution(state_list[i], fig=fig, ax=axes[1][i])
+            axes[2][i].plot(vec1, func1[i])
+            axes[2][i].set_xticks(ticks)
+            axes[2][i].set_xticklabels(labels, fontsize=20)
+            axes[2][i].set_xlim(-xlim1, xlim1)
+            axes[2][i].grid(True)
+            axes[3][i].plot(vec2, func2[i])
+            axes[3][i].set_xticks(ticks)
+            axes[3][i].set_xticklabels(labels, fontsize=20)
+            axes[3][i].set_xlim(-xlim2, xlim2)
+            axes[3][i].grid(True)
+            axes[4][i].plot(vec3, func3[i])
+            axes[4][i].set_xticks(ticks)
+            axes[4][i].set_xticklabels(labels, fontsize=20)
+            axes[4][i].set_xlim(-xlim3, xlim3)
+            axes[4][i].grid(True)
+
+        print("plotting done, time: %6f" % float(time.time()-start))
+        plt.show()
+        exit()
