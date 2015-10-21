@@ -16,7 +16,7 @@ class Memoize:
         for i, arg in enumerate(arglist):
             if isinstance(arg, np.ndarray):
                 arg.flags.writeable = False
-                arglist[i] = hash(arg.data)
+                arglist[i] = hash(arg.tobytes())
         key = tuple(arglist)
         if key not in self.memo:
             self.memo[key] = self.f(*args)
@@ -27,8 +27,27 @@ class Memoize:
 
 
 def int2bin(Min, Max, m):
-    return np.arange(Min, Max)[:,np.newaxis] >> np.arange(m)[::-1] & 1
+    return np.arange(Min, Max)[:, np.newaxis] >> np.arange(m)[::-1] & 1
 
+
+def mask(choicelist, condlist, default=0):
+    """
+    Return an array of the same length as choicelist masked by condlist
+
+    bit of a hack
+
+    Args:
+        choicelist: Array
+        condlist: Boolean Array with same length as choicelist
+        default: all entries j of choicelist with condlist[j] == False
+            are set to default
+
+    Returns:
+        array
+    """
+    choicelist_list = [choicelist, choicelist]
+    condlist_list = [condlist, condlist]
+    return np.select(condlist_list, choicelist_list, default)
 
 
 def split_function(x, y):

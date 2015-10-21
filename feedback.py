@@ -69,9 +69,6 @@ import unittest
 from misc import Memoize
 from qutip import *
 
-print("Warning, measurement results are stored inverse")
-print("e.g. round1=0, round2=1 is stored as x=2")
-
 # import test_data
 
 M = 10
@@ -160,7 +157,8 @@ class TestFeedback(unittest.TestCase):
 # FUNCTIONS
 
 def shorten(m, n_m):
-    return np.take(n_m,np.arange(m))
+    return np.take(n_m, np.arange(m))
+
 
 # Checked, OK
 @Memoize
@@ -220,10 +218,10 @@ def estimate(m, n_m, mode):
 def feedback(m, n_m, mode):
     """
     wrapper for feedback_function, saves some time (f(1,0) = f(1,1) etc.)
-    
-    the feedback does not depend on the last measurement result, as it is 
+
+    the feedback does not depend on the last measurement result, as it is
     applied before the last measurement. This wrapper helps with memoization.
-    
+
     Args:
         m: Integer, current round of the protocol
         x: Integer, measurement results of the whole protocol
@@ -258,22 +256,22 @@ def feedback_function(m, n_m, mode):
     Returns:
         Float, feedback
     """
-    if mode == 0:
+    if mode in (0, 'rpe'):
         return np.mod(m*np.pi/2, np.pi)
 
-    elif mode == 1:
+    elif mode in (1, 'arpe'):
         if m == 0:
             # if no measurement has been made, any feedback is ok. Choose 0.
             return 0
         return opt.fminbound(_S_optimize, 0, 2*np.pi, args=(m, n_m, mode))
 
-    elif mode == 2:
+    elif mode in (2, 'off'):
         return 0
 
-    elif mode == 3:
+    elif mode in (3, 'random'):
         # Memoization ensures that multiple calls with same args yield same res
         return np.random.random_sample()
-    
+
 
 # TODO uses global var M
 def _S_optimize(phi, m, n_m, mode):
@@ -435,8 +433,8 @@ def P_no_error(m, n_m, mode):
 # MISC
 
 def _parallel_helper(n_m, m, mode):
-    #feedback_function(m, x, mode)
-    #estimate(m, x, mode)
+    # feedback_function(m, x, mode)
+    # estimate(m, x, mode)
     return 1 - P_no_error(m, n_m, mode)
 
 
@@ -452,7 +450,7 @@ def result_range(Min, Max, m):
 if __name__ == '__main__':
     # unittest.main(verbosity=2)
 
-    print("Simulating feedback on ideal code")
+    print("Simulating feedback without weighing on ideal code")
     Mmax = 9
 
     numBins = 500
@@ -465,18 +463,16 @@ if __name__ == '__main__':
     delta_theta = np.zeros((Mmax, 2**Mmax))
     hist_array = np.zeros((4, Mmax, numBins))
     bin_array = np.zeros((4, Mmax, numBins+1))
-    plotListmax = max(plotList)
 
     # compute
     for mode in np.arange(4):
         mode_name = ['rpe', 'arpe', 'off', 'random'][mode]
-        P_array = [np.zeros(2**m) for m in np.arange(1,Mmax+1)]
-        for m in np.arange(1,Mmax+1):
+        P_array = [np.zeros(2**m) for m in np.arange(1, Mmax+1)]
+        for m in np.arange(1, Mmax+1):
             # print(m)
             result_list = result_range(0, 2**m, m)
-            P_array[m-1] = parallel_map(_parallel_helper, result_list,
+            P_array[m-1] = serial_map(_parallel_helper, result_list,
                                       task_args=(m, mode))
-            # print(np.mean(P_array[m]))
             hist, bins = np.histogram(np.clip(P_array[m-1], 0, 0.2),
                                       numBins, range=(0, 1), density=True)
             hist_array[mode, m-1] = hist/numBins
@@ -518,7 +514,7 @@ if __name__ == '__main__':
                 ax.yaxis.set_label_position("right")
                 ax.set_ylabel(str(m), fontsize=16, rotation='horizontal')
                 ax.yaxis.labelpad = 31
-            if m == plotListmax:
+            if m == max(plotList):
                 ax.set_xlabel(r'$P_{\mathrm{error,p}}^{\sqrt{\pi}/6}$')
     ax_array[0][0].set_title(r'RPE', fontsize=20)
     ax_array[0][1].set_title(r'ARPE', fontsize=20)
